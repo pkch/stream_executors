@@ -1,9 +1,9 @@
-## Enhanced Executors
+# Enhanced Executors
 
 This library provides several classes extending the functionality of the
 standard library `concurrent.futures.Executor`.
 
-# StreamExecutor
+## StreamExecutor
 
 `StreamExecutor.map` acquires only a part of the inputs in advance (as
 specified by the client in the parameter `buffer_size`), and does it in

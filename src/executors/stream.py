@@ -13,7 +13,7 @@ class CancelledError(Exception):
 
 
 class StreamExecutor(ThreadPoolExecutor):
-    def map(self, fn, *iterables, timeout=None, chunksize=1, buffer_size=10):
+    def map(self, fn, *iterables, timeout=None, chunksize=1, buffer_size=10000):
         """Returns an iterator equivalent to map(fn, iter).
 
         Args:
@@ -59,7 +59,7 @@ class StreamExecutor(ThreadPoolExecutor):
         # and to stop reading after that. Any value of type BaseException is
         # treated as a sentinel.
         input_buffer = Queue(maxsize=buffer_size)
-        futures_buffer = Queue(10)
+        futures_buffer = Queue()
 
         # This function will run in a separate thread.
         def consume_inputs():

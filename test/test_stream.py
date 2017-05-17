@@ -7,7 +7,7 @@ import pytest
 
 from executors import StreamExecutor
 
-approx = partial(pytest.approx, abs=0.03)
+approx = partial(pytest.approx, abs=0.5)
 
 class Timer:
     def __enter__(self):

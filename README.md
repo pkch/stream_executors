@@ -5,13 +5,14 @@ standard library `concurrent.futures.Executor`.
 
 ## StreamExecutor
 
-`StreamExecutor.map` acquires only a part of the inputs in advance (as
-specified by the client in the parameter `buffer_size`), and does it in
+`StreamExecutor` attempts to address some of the limitations of the standard
+library `Executor.map` by acquiring only a part of its inputs in advance (as
+specified by the client in the parameter `buffer_size`), and doing that in
 the background.
 
-The standard library `ThreadPoolExecutor.map` and `ProcessPoolExecutor.map`
-acquire all of the inputs in advance, synchronously. This has several
-limitations:
+By comparison, the standard library `ThreadPoolExecutor.map` and
+`ProcessPoolExecutor.map` acquire all of the inputs in advance,
+synchronously. As a result:
 
 1. The entire input is stored in memory. This makes `Executor.map`
 incompatible with the builtin `map` that uses iterators to support processing
@@ -23,6 +24,7 @@ avoid blocking.
 
 3. The entire input is produced and processed regardless of whether it is
 necessary. This may result in wasted computational and memory resources.
+
 
 A naive implementation of `Executor.map` that precisely imitates the regular
 `map` would solve all these problems. However, it would submit each task to

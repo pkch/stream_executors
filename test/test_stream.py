@@ -8,7 +8,7 @@ from executors import StreamThreadPoolExecutor, StreamProcessPoolExecutor
 
 approx = partial(pytest.approx, abs=0.5)
 
-test_classes = [StreamThreadPoolExecutor]
+test_classes = [StreamThreadPoolExecutor, StreamProcessPoolExecutor]
 
 class Timer:
     def __enter__(self):
@@ -99,15 +99,17 @@ def test_timing(test_class):
         assert list(g) == list(range(1, 2*input_size, 2))
         assert t.elapsed() == approx(1)
 
-    executor = test_class()
+    executor = test_class(max_workers=10)
     with Timer() as t:
         print(list(islice(filter(None, executor.map(process, count())), input_size)))
-        assert t.elapsed() == approx(0.1)
+        if test_class == StreamThreadPoolExecutor:
+            assert t.elapsed() == approx(0.1)
 
     with Timer() as t:
         it = islice(filter(None, executor.map(process, produce())), input_size)
         for x in it:
-            t.elapsed() == approx(0.3)
+            if test_class == StreamThreadPoolExecutor:
+                t.elapsed() == approx(0.3)
             break
         for x in it:
             pass

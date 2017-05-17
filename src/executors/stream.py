@@ -1,6 +1,7 @@
 import time
 from queue import Queue
 from concurrent.futures import Executor, ThreadPoolExecutor, ProcessPoolExecutor
+from concurrent.futures.process import _get_chunks, _process_chunk
 from traceback import print_stack
 from functools import partial
 from collections import deque
@@ -127,7 +128,15 @@ class StreamExecutor(Executor):
         next(result)
         return result
 
-class StreamThreadPoolExecutor(ThreadPoolExecutor, StreamExecutor): ...
+class StreamThreadPoolExecutor(StreamExecutor, ThreadPoolExecutor): ...
 
-class StreamProcessPoolExecutor(ProcessPoolExecutor, StreamExecutor): ...
-
+class StreamProcessPoolExecutor(StreamExecutor, ProcessPoolExecutor):
+    def map(self, fn, *iterables, timeout=None, chunksize=1, buffer_size=10000):
+        if buffer_size is not None:
+            buffer_size //= max(1, chunksize)
+        if chunksize < 1:
+            raise ValueError("chunksize must be >= 1.")
+        results = super().map(partial(_process_chunk, fn),
+                              _get_chunks(*iterables, chunksize=chunksize),
+                              timeout=timeout, buffer_size=buffer_size)
+        return itertools.chain.from_iterable(results)

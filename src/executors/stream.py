@@ -118,10 +118,8 @@ class StreamExecutor(ThreadPoolExecutor):
                 except BaseException as exc:
                     cleanup()
 
-
-        # Reusing existing thread pool will cause livelock if <3 threads idle.
-        admin_executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix=self._thread_name_prefix + ': map admin')
-        input_generator = admin_executor.submit(consume_inputs)
+        thread = threading.Thread(target=consume_inputs, name=self._thread_name_prefix+'_map')
+        thread.start()
         # After map returns, admin_executor will be collected and shut down;
         # we don't care when since we never need to submit more tasks to it.
         result = produce_results()

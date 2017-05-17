@@ -58,14 +58,13 @@ class StreamExecutor(ThreadPoolExecutor):
         # guarantees to read the queue until it encounters a sentinel value
         # and to stop reading after that. Any value of type BaseException is
         # treated as a sentinel.
-        input_buffer = Queue(maxsize=buffer_size)
-        futures_buffer = Queue()
+        future_buffer = Queue(maxsize=buffer_size)
 
         # This function will run in a separate thread.
         def consume_inputs():
             while True:
                 if cancel:
-                    input_buffer.put(CancelledError())
+                    future_buffer.put(CancelledError())
                     return
                 try:
                     args = [next(iterator) for iterator in iterators]
@@ -74,33 +73,16 @@ class StreamExecutor(ThreadPoolExecutor):
                     # exception is due to an error in the input generator. We
                     # forward the exception downstream so it can be raised
                     # when client iterates through the result of map.
-                    input_buffer.put(e)
-                    return
-                else:
-                    input_buffer.put(args)
-
-        # This function will run in a separate thread.
-        def submit_inputs():
-            nonlocal cancel
-            while True:
-                if cancel:
-                    futures_buffer.put(CancelledError())
-                    break
-                args = input_buffer.get()
-                if isinstance(args, BaseException):
-                    # Forward upstream exceptions downstream.
-                    futures_buffer.put(args)
+                    future_buffer.put(e)
                     return
                 try:
                     future = self.submit(fn, *args)
-                    futures_buffer.put(future)
                 except BaseException as e:
-                    # Cancel upstream and forward the new exception downstream.
-                    cancel = True
-                    futures_buffer.put(e)
-                    break
-            while not isinstance(input_buffer.get(), BaseException):
-                pass
+                    # E.g., RuntimeError from shut down executor.
+                    # Forward the new exception downstream.
+                    future_buffer.put(e)
+                    return
+                future_buffer.put(future)
 
         # This function will run in the main thread.
         def produce_results():
@@ -108,7 +90,7 @@ class StreamExecutor(ThreadPoolExecutor):
                 nonlocal cancel
                 cancel = True
                 while True:
-                    future = futures_buffer.get()
+                    future = future_buffer.get()
                     if isinstance(future, BaseException):
                         break
                     else:
@@ -121,7 +103,7 @@ class StreamExecutor(ThreadPoolExecutor):
             except GeneratorExit as exc:
                 cleanup()
             while True:
-                future = futures_buffer.get()
+                future = future_buffer.get()
                 if isinstance(future, BaseException):
                     # Reraise upstream exceptions at the map call site.
                     raise future
@@ -138,9 +120,8 @@ class StreamExecutor(ThreadPoolExecutor):
 
 
         # Reusing existing thread pool will cause livelock if <3 threads idle.
-        admin_executor = ThreadPoolExecutor(max_workers=3, thread_name_prefix=self._thread_name_prefix + ': map admin')
+        admin_executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix=self._thread_name_prefix + ': map admin')
         input_generator = admin_executor.submit(consume_inputs)
-        futures_generator = admin_executor.submit(submit_inputs)
         # After map returns, admin_executor will be collected and shut down;
         # we don't care when since we never need to submit more tasks to it.
         result = produce_results()

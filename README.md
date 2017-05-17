@@ -1,14 +1,19 @@
+[![Build Status](https://travis-ci.org/pkch/executors.svg)](https://travis-ci.org/pkch/executors)
+[![Coverage Status](https://coveralls.io/repos/github/pkch/executors/badge.svg?branch=master)](https://coveralls.io/github/pkch/executors?branch=master)
+[![MIT licensed](https://img.shields.io/badge/license-MIT-blue.svg)](https://raw.githubusercontent.com/pkch/executors/LICENSE)
+
 # Enhanced Executors
 
 This library provides several classes extending the functionality of the
 standard library `concurrent.futures.Executor`.
 
-## StreamPoolThreadExecutor, StreamProcessPoolExecutor
+## StreamExecutor
 
-`StreamExecutor` attempts to address some of the limitations of the standard
-library `Executor.map` by acquiring only a part of its inputs in advance (as
-specified by the client in the parameter `buffer_size`), and doing that in
-the background.
+`StreamThreadPoolExecutor` and `StreamProcessPoolExecutor` are subclasses of
+`Executor` that address some of the limitations of the `map` method in the
+corresponding standard library classes: they acquire only a part of its
+inputs in advance (as specified by the client in the parameter
+`buffer_size`), and do that in the background.
 
 By comparison, the standard library `ThreadPoolExecutor.map` and
 `ProcessPoolExecutor.map` acquire all of the inputs in advance,
@@ -24,7 +29,6 @@ avoid blocking.
 
 3. The entire input is produced and processed regardless of whether it is
 necessary. This may result in wasted computational and memory resources.
-
 
 A naive implementation of `Executor.map` that precisely imitates the regular
 `map` would solve all these problems. However, it would submit each task to

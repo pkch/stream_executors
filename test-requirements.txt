@@ -1,0 +1,6 @@
+flake8
+flake8-bugbear
+pytest
+pytest-cov
+git+https://github.com/python/mypy.git@master
+python-coveralls

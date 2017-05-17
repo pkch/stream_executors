@@ -1,0 +1,16 @@
+sudo: false
+language: python
+python:
+  - "3.6"
+
+install:
+  - pip install -r test-requirements.txt
+  - pip install -e .
+
+script:
+  - pytest -v --cov --cov-report term-missing
+  - #flake8
+  - #mypy --strict src/executors
+
+after_success:
+  - coveralls

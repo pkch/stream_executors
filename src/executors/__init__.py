@@ -1,1 +1,1 @@
-from .stream import StreamExecutor
+from .stream import StreamExecutor, StreamProcessPoolExecutor, StreamThreadPoolExecutor

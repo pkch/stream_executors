@@ -3,7 +3,7 @@
 This library provides several classes extending the functionality of the
 standard library `concurrent.futures.Executor`.
 
-## StreamExecutor
+## StreamPoolThreadExecutor, StreamProcessPoolExecutor
 
 `StreamExecutor` attempts to address some of the limitations of the standard
 library `Executor.map` by acquiring only a part of its inputs in advance (as
@@ -80,9 +80,10 @@ Comparison with other map functions:
     executor = ThreadPoolExecutor(max_workers=10)
     m = executor.map(process, count())
 
-    # StreamExecutor.map takes 0.1 * 20 / 2 = 1 sec
+    from executors import StreamThreadPoolExecutor
+    # StreamThreadPoolExecutor.map takes 0.1 * 20 / 2 = 1 sec
     # starts processing here, without waiting for iteration
-    executor = StreamExecutor(max_workers=2)
+    executor = StreamThreadPoolExecutor(max_workers=2)
     m = executor.map(process, count())
     g = islice(filter(is_odd, m), n)
     time.sleep(0.5)

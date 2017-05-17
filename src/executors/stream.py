@@ -1,6 +1,6 @@
 import time
 from queue import Queue
-from concurrent.futures import ThreadPoolExecutor, TimeoutError
+from concurrent.futures import Executor, ThreadPoolExecutor, ProcessPoolExecutor
 from traceback import print_stack
 from functools import partial
 from collections import deque
@@ -12,7 +12,7 @@ class CancelledError(Exception):
     pass
 
 
-class StreamExecutor(ThreadPoolExecutor):
+class StreamExecutor(Executor):
     def map(self, fn, *iterables, timeout=None, chunksize=1, buffer_size=10000):
         """Returns an iterator equivalent to map(fn, iter).
 
@@ -118,7 +118,7 @@ class StreamExecutor(ThreadPoolExecutor):
                 except BaseException as exc:
                     cleanup()
 
-        thread = threading.Thread(target=consume_inputs, name=self._thread_name_prefix+'_map')
+        thread = threading.Thread(target=consume_inputs)
         thread.start()
         # After map returns, admin_executor will be collected and shut down;
         # we don't care when since we never need to submit more tasks to it.
@@ -126,3 +126,8 @@ class StreamExecutor(ThreadPoolExecutor):
         # Consume the dummy `None` result
         next(result)
         return result
+
+class StreamThreadPoolExecutor(ThreadPoolExecutor, StreamExecutor): ...
+
+class StreamProcessPoolExecutor(ProcessPoolExecutor, StreamExecutor): ...
+

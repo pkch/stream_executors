@@ -1,13 +1,14 @@
-from concurrent.futures import ThreadPoolExecutor
 from  itertools import islice, count
 from functools import partial
 import time
 
 import pytest
 
-from executors import StreamExecutor
+from executors import StreamThreadPoolExecutor, StreamProcessPoolExecutor
 
 approx = partial(pytest.approx, abs=0.5)
+
+test_classes = [StreamThreadPoolExecutor]
 
 class Timer:
     def __enter__(self):
@@ -39,9 +40,10 @@ def process(i):
     return i + 1
 
 
-# Testing for deadlocks observed earlier
-def test_unused_generator():
-    executor = StreamExecutor(max_workers=2)
+@pytest.mark.parametrize("test_class", test_classes)
+def test_unused_generator(test_class):
+    # Testing for deadlocks observed earlier
+    executor = test_class(max_workers=2)
     gen = produce()
     executor.map(process, gen, buffer_size=10)
     # Delay to reproduce deadlock observed earlier
@@ -57,16 +59,18 @@ def test_unused_generator():
     executor.map(process, gen, buffer_size=1)
     last_processed = None
     gen = produce()
-    with StreamExecutor(max_workers=2) as executor:
+    with test_class(max_workers=2) as executor:
         executor.map(process, gen, buffer_size=10)
 
-def test_error():
-    with StreamExecutor(max_workers=2) as executor:
+@pytest.mark.parametrize("test_class", test_classes)
+def test_error(test_class):
+    with test_class(max_workers=2) as executor:
         g = executor.map(process, produce(error=2))
         with pytest.raises(ValueError):
             list(g)
 
-def test_timing():
+@pytest.mark.parametrize("test_class", test_classes)
+def test_timing(test_class):
     input_size = 10
     is_odd = lambda x: x%2
 
@@ -85,9 +89,9 @@ def test_timing():
         #m = executor.map(process, count())
 
     with Timer() as t:
-        # StreamExecutor.map takes 0.1 * 20 / 2 = 1 sec
+        # test_class.map takes 0.1 * 20 / 2 = 1 sec
         # starts processing here, without waiting for iteration
-        executor = StreamExecutor(max_workers=2)
+        executor = test_class(max_workers=2)
         m = executor.map(process, count())
         g = islice(filter(is_odd, m), input_size)
         assert t.elapsed() == approx(0)
@@ -95,7 +99,7 @@ def test_timing():
         assert list(g) == list(range(1, 2*input_size, 2))
         assert t.elapsed() == approx(1)
 
-    executor = StreamExecutor()
+    executor = test_class()
     with Timer() as t:
         print(list(islice(filter(None, executor.map(process, count())), input_size)))
         assert t.elapsed() == approx(0.1)

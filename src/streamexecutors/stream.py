@@ -40,6 +40,8 @@ class StreamExecutor(Executor):
                 before the given timeout.
             Exception: If fn(*args) raises for any values.
         """
+        if not callable(fn):
+            raise TypeError('fn argument must be a callable')
         if timeout is None:
             end_time = None
         else:
@@ -47,6 +49,8 @@ class StreamExecutor(Executor):
 
         if buffer_size is None:
             buffer_size = -1
+        elif buffer_size <= 0:
+            raise ValueError('buffer_size must be a positive number')
 
         iterators = [iter(iterable) for iterable in iterables]
 
@@ -121,8 +125,6 @@ class StreamExecutor(Executor):
 
         thread = threading.Thread(target=consume_inputs)
         thread.start()
-        # After map returns, admin_executor will be collected and shut down;
-        # we don't care when since we never need to submit more tasks to it.
         result = produce_results()
         # Consume the dummy `None` result
         next(result)

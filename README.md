@@ -1,94 +1,170 @@
-[![Build Status](https://travis-ci.org/pkch/executors.svg)](https://travis-ci.org/pkch/executors)
-[![Coverage Status](https://coveralls.io/repos/github/pkch/executors/badge.svg?branch=master)](https://coveralls.io/github/pkch/executors?branch=master)
-[![MIT licensed](https://img.shields.io/badge/license-MIT-blue.svg)](https://raw.githubusercontent.com/pkch/executors/LICENSE)
+[![Build Status](https://travis-ci.org/pkch/stream_executors.svg)](https://travis-ci.org/pkch/stream_executors)
+[![Coverage Status](https://coveralls.io/repos/github/pkch/stream_executors/badge.svg?branch=master)](https://coveralls.io/github/pkch/stream_executors?branch=master)
+[![MIT licensed](https://img.shields.io/badge/license-MIT-blue.svg)](https://raw.githubusercontent.com/pkch/stream_executors/LICENSE)
 
-# Enhanced Executors
+# Stream Executor
 
-This library provides several classes extending the functionality of the
-standard library `concurrent.futures.Executor`.
+Drop-in replacements for the `concurrent.futures` executors with non-blocking
+`map`.
 
-## StreamExecutor
+## Background
 
-`StreamThreadPoolExecutor` and `StreamProcessPoolExecutor` are subclasses of
-`Executor` that address some of the limitations of the `map` method in the
-corresponding standard library classes: they acquire only a part of its
-inputs in advance (as specified by the client in the parameter
-`buffer_size`), and do that in the background.
+The standard library `Executor.map` has several limitations:
 
-By comparison, the standard library `ThreadPoolExecutor.map` and
-`ProcessPoolExecutor.map` acquire all of the inputs in advance,
-synchronously. As a result:
-
-1. The entire input is stored in memory. This makes `Executor.map`
-incompatible with the builtin `map` that uses iterators to support processing
-arbitrarily large or infinite inputs.
+1. The entire input is stored in memory. This makes `Executor.map` unusable
+for large or infinite inputs.
 
 2. A call to `Executor.map` blocks until the entire input is acquired. This
-is unfortunate given that the entire point of `concurrent.futures` is to
-avoid blocking.
+is unfortunate given that `concurrent.futures` is created specifically for
+non-blocking computation.
 
-3. The entire input is produced and processed regardless of whether it is
-necessary. This may result in wasted computational and memory resources.
+3. The entire input is acquired and processed even if most the output is
+never needed. This may result in wasted computational and memory resources.
 
-A naive implementation of `Executor.map` that precisely imitates the regular
-`map` would solve all these problems. However, it would submit each task to
-the worker pool only when the client requests the corresponding result,
-rather than in advance - defeating the main reason to use executors.
+This library provides classes `StreamThreadPoolExecutor` and
+`StreamProcessPoolExecutor` (subclasses of the respective stdlib classes)
+that address those limitations by acquiring inputs in a background thread. To
+avoid memory overflow, it acquires only a part of the inputs in advance, as
+specified by the client in the `buffer_size` argument. Then, as each input is
+processed, a new one is acquired.
 
-A better implementation may pre-process a part of the input in advance, and
-then give the control back to the client. This solves problems 1 and 3.
-`Executor.map` will still block, but only for the time it takes to acquire
-(not process) the specified amount of input. However, if the client wants to
-consume all the output faster than it can be produced, they will want to
-pre-process as much as they can fit into memory. This means `Executor.map`
-may block for a long time.
 
-This implementation acquires the inputs in the background, and therefore does
-not block at all.
+## Examples
 
-Setting `buffer_size` parameter to `None` (which means no limit)
-results in the same behavior as `concurrent.futures.Executor.map` except
-without blocking at the call site. Setting it to 0 would have resulted in the
-same behavior as the builtin `map` (without any benefit of using the worker
-pool; therefore it is not supported).
+### Infinite input, instantaneous production
+
+    import time
+    from concurrent.futures import ThreadPoolExecutor
+    from itertools import count, islice
+
+    from streamexecutors import StreamThreadPoolExecutor
+
+    def square(x):
+        time.sleep(0.1)
+        return x ** 2
+
+    # Parallelizes and doesn't block.
+    squares = StreamThreadPoolExecutor().map(square, count())
+
+    # Compare to builtin and concurrent.futures map
+
+    # Doesn't block, but also doesn't parallelize.
+    squares = map(square, count())
+
+    # Hangs
+    squares = ThreadPoolExecutor().map(square, count())
+
+
+
+### Finite input, slow production
+
+    def produce():
+        for i in range(100):
+            time.sleep(0.02)
+            yield i
+
+    def print10(iterable):
+        print(list(islice(iterable, 10)))
+
+    # Doesn't block.
+    # Total time to completion 10 x 0.02 + 0.1 (parallel) = 0.3 sec.
+    squares = StreamThreadPoolExecutor().map(square, produce())
+    print10(squares)
+
+    # Compare to builtin and concurrent.futures map
+
+    # Doesn't block.
+    # Total time to completion 10 x (0.1 + 0.02) = 1.2 sec (sequential).
+    squares = map(square, produce())
+    print10(squares)
+
+    # Blocks for 100 x 0.02 = 2 sec.
+    # Total time to completion 2 + 0.1 (parallel) = 2.1 sec.
+    squares = ThreadPoolExecutor().map(square, produce())
+    print10(squares)
+
+
+
+## Buffer size
+
+If `buffer_size` argument is set to `None`, inputs are acquired without
+limit, replicating `concurrent.futures.Executor.map` behavior only without
+blocking. On a large or infinite input, it will run out of memory and
+possibly hog CPU unless the consumer gets garbage collected quickly (input
+retrieval stops when consumer goes out of scope).
 
 If the output will be consumed slower than it can be produced, a small value
 of `buffer_size` is reasonable (still it should probably be greater
-than 1 to allow for some random variation in resource availability). If the
-output will be consumed faster than it can be produced, `buffer_size`
-should be set to the highest value that memory allows. Of course, if less
-than the entire output will be consumed, a large value of `buffer_size`
-may needlessly perform extra work. Ideally, client should explicitly set this
-argument, but a default value of 10000 is provided because it's unlikely to
-exert pressure on the memory while still performing much of the work in
-advance.
+than 1 to allow for some random variation in resource availability).
 
-Comparison with other map functions:
+If the output will be consumed faster than it can be produced, and the entire
+output is needed, then `buffer_size` should be set to the highest value that
+memory allows.
 
-    def process(i):
-        time.sleep(0.1)
-        return i
+If the output will be consumed faser than it can be produced, but only a part
+of the output will be needed, the choice of `buffer_size` should be based on
+the trade-off between performing extra work and causing a delay.
 
-    is_odd = lambda x: x%2
+Note that `buffer_size` defines the size of the `queue.Queue` used to
+communicate between threads. Therefore, the maximum number of items stored at
+one time is actually `buffer_size + 1`, since one additional item may be
+stored in the local variable of the thread waiting on `Queue.get`.
 
-    n = 10 # will need 20 numbers to get 10 odd ones
+The default value of `buffer_size` is set to 10000, as a trade-off between
+protection against memory overflow, and avoiding processing delay. In some
+cases, this default value may result in less efficient behavior of this
+implementation compared to the concurrent.futures.Executor. This would
+happen, for example, if the input of size 100,000 is produced slowly, the
+entire output will be needed at once much later, and the entire input and
+output can fit in memory. If the client was not sure if 100,000 items will
+fit in memory, they might have kept the default value for `buffer_size`, and
+suffered an unnecessary delay.
 
-    # built-in map takes 0.1 * 20 + 0.5 = 2.5 sec
-    m = map(process, count())
-    g = islice(filter(is_odd, m), n)
-    time.sleep(0.5)
-    # only starts processing here
-    assert list(g) == list(range(1, 2*n, 2))
+Setting `buffer_size` to 0 is not supported at present: it would increase
+code complexity for no obvious use case. If it was supported, it would behave
+the same as the built-in `map`, and eliminate the benefit of the worker pool.
 
-    # ThreadPoolExecutor.map hangs
-    executor = ThreadPoolExecutor(max_workers=10)
-    m = executor.map(process, count())
 
-    from executors import StreamThreadPoolExecutor
-    # StreamThreadPoolExecutor.map takes 0.1 * 20 / 2 = 1 sec
-    # starts processing here, without waiting for iteration
-    executor = StreamThreadPoolExecutor(max_workers=2)
-    m = executor.map(process, count())
-    g = islice(filter(is_odd, m), n)
-    time.sleep(0.5)
-    assert list(g) == list(range(1, 2*n, 2))
+## Advanced example
+
+In the [Word Count
+example](https://github.com/pkch/stream_executors/blob/master/examples/wordcount.py),
+this implementation is be used to create a simple pipeline:
+
+    get_urls -> download -> count_word -> upload -> islice -> list
+
+Here, `map` is used for the first three arrows, and their `buffer_size`
+arguments are set to 1 for demonstration purposes. The fourth arrow
+corresponds to `islice` iterating through 2 items, and the final fifth arrows
+corresponds to `list` consuming the final result.
+
+Before `islice` is invoked, a long time is spent in `time.sleep()` so the
+buffers are probably filled (assuming no network issues). This means that 2
+upload results are waiting to be iterated through. They of course were
+created by uploading word count data for 2 pages; additionally, 2 word counts
+are waiting to be uploaded - for a total of 4 word count data items.
+Similarly, 2 + 2 + 2 = 6 pages have been downloaded.
+
+Right after `islice` is invoked, the final buffer is no longer full, so the
+pipeline continues processing - only to be stopped almost at once as the
+consumer is garbage collected (`map` detects that and stops additional tasks
+from being created).
+
+
+## Implementation choices
+
+A naive implementation of `Executor.map` that precisely imitates the regular
+`map` would not be useful because it would submit each task to the worker
+pool only when the client requests the corresponding result - defeating the
+main reason to use executors.
+
+An implementation that pre-processes a part of the input in advance, and then
+gives the control back to the client, would be better: it would solve
+problems 1 and 3. However, it would still block while it is acquiring the
+specified number of inputs; this can take arbitrarily long time if the client
+wants to pre-acquire many inputs and the input production is slow. Of course,
+in the common case where the input is all in memory, this implementation is
+good enough (since input production is instantaneous).
+
+This implementation acquires the inputs in the background, and therefore does
+not block at all.

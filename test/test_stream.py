@@ -1,14 +1,17 @@
 from  itertools import islice, count
 from functools import partial
 import time
+import os
 
 import pytest
 
-from executors import StreamThreadPoolExecutor, StreamProcessPoolExecutor
+from streamexecutors import StreamThreadPoolExecutor, StreamProcessPoolExecutor
 
 approx = partial(pytest.approx, abs=0.5)
 
 test_classes = [StreamThreadPoolExecutor, StreamProcessPoolExecutor]
+# pytest bug with skipif(sys.platform != 'win32'): https://github.com/pytest-dev/pytest/issues/1296
+test_classes_timing = [StreamThreadPoolExecutor]
 
 class Timer:
     def __enter__(self):
@@ -36,7 +39,6 @@ def produce(n=None, error=None):
 def process(i):
     s = time.perf_counter()
     time.sleep(0.1)
-    # This will be in multiple threads.
     return i + 1
 
 
@@ -69,26 +71,11 @@ def test_error(test_class):
         with pytest.raises(ValueError):
             list(g)
 
-# TODO: StreamProcessPoolExecutor hangs here on Travis but passes on Windows
-@pytest.mark.parametrize("test_class", [StreamThreadPoolExecutor])
-def test_timing(test_class):
-    input_size = 10
-    is_odd = lambda x: x%2
+input_size = 10
+is_odd = lambda x: x%2
 
-    #with Timer() as t:
-        ## built-in map takes 0.1 * 40 + 0.5 = 4.5 sec
-        #m = map(process, count())
-        #g = islice(filter(is_odd, m), input_size)
-        #time.sleep(0.5)
-        ## only starts processing here
-        #assert list(g) == list(range(1, 20, 2))
-        #t.elapsed() == approx(4.5)
-
-    #with Timer() as t:
-        ## ThreadPoolExecutor.map hangs
-        #executor = ThreadPoolExecutor(max_workers=10)
-        #m = executor.map(process, count())
-
+@pytest.mark.parametrize("test_class", test_classes_timing)
+def test_timing_2_workers(test_class):
     with Timer() as t:
         # test_class.map takes 0.1 * 20 / 2 = 1 sec
         # starts processing here, without waiting for iteration
@@ -100,6 +87,9 @@ def test_timing(test_class):
         assert list(g) == list(range(1, 2*input_size, 2))
         assert t.elapsed() == approx(1)
 
+
+@pytest.mark.parametrize("test_class", test_classes_timing)
+def test_timing_10_workers(test_class):
     executor = test_class(max_workers=10)
     with Timer() as t:
         print(list(islice(filter(None, executor.map(process, count())), input_size)))
@@ -124,4 +114,3 @@ def test_timing(test_class):
         for x in it:
             pass
         assert t.elapsed() == approx(3)
-

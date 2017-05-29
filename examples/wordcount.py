@@ -6,6 +6,12 @@ from itertools import islice
 
 from streamexecutors import StreamThreadPoolExecutor
 
+try:
+    from streamexecutors import secrets
+    auth = secrets.GITHUB_AUTHKEY
+except ImportError:
+    auth = None
+
 # TODO: add test to show how many items were processed by each stage
 # TODO: change get_urls to an infinite stream
 def wordcount_pipeline():
@@ -15,7 +21,9 @@ def wordcount_pipeline():
     # note: without authentication, API rate limit is 60 requests per hour
     def get_urls():
         print('  downloading recently updated repos')
-        response = requests.get('https://api.github.com/events')
+        response = requests.get('https://api.github.com/events', auth=auth)
+        if response.status_code != 200 or type(response.json()) != list:
+            raise RuntimeError('Github API request failed')
         for event in response.json():
             yield 'http://github.com/' + event['repo']['name']
 

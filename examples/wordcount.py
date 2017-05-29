@@ -15,7 +15,7 @@ def wordcount_pipeline():
     # note: without authentication, API rate limit is 60 requests per hour
     def get_urls():
         print('  downloading recently updated repos')
-        response = requests.get('https://api.github.com/events', auth=('pkch', 'ec8b65d1e4390b9932498f613eb79e08b2ea4e2d'))
+        response = requests.get('https://api.github.com/events')
         for event in response.json():
             yield 'http://github.com/' + event['repo']['name']
 

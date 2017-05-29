@@ -6,7 +6,9 @@ from itertools import islice
 
 from streamexecutors import StreamThreadPoolExecutor
 
-def test_readme_examples():
+# TODO: add test to show how many items were processed by each stage
+# TODO: change get_urls to an infinite stream
+def wordcount_pipeline():
 
     ex = StreamThreadPoolExecutor()
 
@@ -47,20 +49,25 @@ def test_readme_examples():
     counts = ex.map(partial(count_word, 'python'), pages, buffer_size=1)
 
     # Pause uploading when there are 2 responses waiting to be iterated through.
-    responses = ex.map(upload, counts, buffer_size=1)
+    upload_results = ex.map(upload, counts, buffer_size=1)
 
     # Processing continues in the background until buffer_size limits are reached.
     print('main thread busy')
     time.sleep(5)
 
+    # islice is lazy - nothing is consumed until its results are needed.
+    first2 = islice(upload_results, 2)
+
     print('main thread iterates through results')
-    # If sleep was long enough to fill the buffer, this call won't block.
-    print(list(islice(responses, 2)))
+    # Greedily consume results. If sleep was long enough to fill the buffer, it won't block.
+    result = list(first2)
     # As we consume the results, the processing will immediately continue.
 
-    # As responses goes out of scope, executor will cancel all pending tasks
+    print(result)
+
+    # As pipeline objects go out of scope, executor will cancel all pending tasks
     # and wait for tasks progress to complete. This delays interpreter exit.
 
 if __name__ == '__main__':
-    test_readme_examples()
+    wordcount_pipeline()
 

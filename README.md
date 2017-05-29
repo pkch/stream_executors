@@ -84,6 +84,52 @@ processed, a new one is acquired.
     print10(squares)
 
 
+### Pipeline
+
+In the [Word Count
+example](https://github.com/pkch/stream_executors/blob/master/examples/wordcount.py),
+this implementation is used to create a simple pipeline, where each stage
+consumes the output of the previous stage:
+
+    # Generator of urls of recently updated Github repos.
+    def get_url(): ...
+
+    # Download a url and produce `requests.Response` object.
+    pages = ex.map(download, get_urls(), buffer_size=1)
+
+    # Read page, produce a `dict` with page url and word count of 'python'.
+    counts = ex.map(partial(count_word, 'python'), pages, buffer_size=1)
+
+    # Upload count dict to an echo server, produce server response (as json).
+    upload_results = ex.map(upload, counts, buffer_size=1)
+
+    # Lazily produce the first two upload_results.
+    first_2 = islice(upload_results, 2)
+
+    # Do some other work in the main thread for a while.
+    ...
+
+    # Greedily consume everything.
+    result = list(first2)
+
+With `buffer_size` set to 1, at most 2 items will be waiting for processing
+by `map`: one will be in the queue, and one will be in the local variable
+waiting on `queue.put`. This means that if enough time was spent on other
+work earlier, there will be 2 echo server responses waiting to be consumed by
+`list` at the time `list` is called, so `list` won't block. This implies
+`count_word` has processed 4 pages: 2 were already processed by `upload`, and
+2 more are waiting to be uploaded. Similarly, `download` has processed 6
+pages: 4 were processed by `count_word`, and 2 more are waiting to be
+consumed by `count_word`.
+
+Right after `list` is invoked, `upload` will see that its buffer is no longer
+full, and so it will start processing again. This immediately causes the rest
+of the pipeline to also start working. However, as the interpreter exits and
+all the pipeline objects are garbage collected, no new processing will be
+allowed, and so the pipeline will stop after existing tasks are completed.
+Depending on the timing of gc, this will result in the downloading of 0-2
+additional pages, counting the words in them, and uploading them to the
+server.
 
 ## Buffer size
 
@@ -107,8 +153,8 @@ the trade-off between performing extra work and causing a delay.
 
 Note that `buffer_size` defines the size of the `queue.Queue` used to
 communicate between threads. Therefore, the maximum number of items stored at
-one time is actually `buffer_size + 1`, since one additional item may be
-stored in the local variable of the thread waiting on `Queue.get`.
+any one time is actually `buffer_size + 1`, since one additional item may be
+stored in the local variable of the thread waiting on `Queue.put`.
 
 The default value of `buffer_size` is set to 10000, as a trade-off between
 protection against memory overflow, and avoiding processing delay. In some
@@ -123,32 +169,6 @@ suffered an unnecessary delay.
 Setting `buffer_size` to 0 is not supported at present: it would increase
 code complexity for no obvious use case. If it was supported, it would behave
 the same as the built-in `map`, and eliminate the benefit of the worker pool.
-
-
-## Advanced example
-
-In the [Word Count
-example](https://github.com/pkch/stream_executors/blob/master/examples/wordcount.py),
-this implementation is be used to create a simple pipeline:
-
-    get_urls -> download -> count_word -> upload -> islice -> list
-
-Here, `map` is used for the first three arrows, and their `buffer_size`
-arguments are set to 1 for demonstration purposes. The fourth arrow
-corresponds to `islice` iterating through 2 items, and the final fifth arrows
-corresponds to `list` consuming the final result.
-
-Before `islice` is invoked, a long time is spent in `time.sleep()` so the
-buffers are probably filled (assuming no network issues). This means that 2
-upload results are waiting to be iterated through. They of course were
-created by uploading word count data for 2 pages; additionally, 2 word counts
-are waiting to be uploaded - for a total of 4 word count data items.
-Similarly, 2 + 2 + 2 = 6 pages have been downloaded.
-
-Right after `islice` is invoked, the final buffer is no longer full, so the
-pipeline continues processing - only to be stopped almost at once as the
-consumer is garbage collected (`map` detects that and stops additional tasks
-from being created).
 
 
 ## Implementation choices

@@ -1,16 +1,12 @@
 import time
-from queue import Queue
+from queue import Queue, Full, Empty
 from concurrent.futures import Executor, ThreadPoolExecutor, ProcessPoolExecutor
 from concurrent.futures.process import _get_chunks, _process_chunk
-from traceback import print_stack
 from functools import partial
-from collections import deque
 import sys
+import contextlib
 import threading
 import itertools
-
-class CancelledError(Exception):
-    pass
 
 
 class StreamExecutor(Executor):
@@ -52,10 +48,9 @@ class StreamExecutor(Executor):
         elif buffer_size <= 0:
             raise ValueError('buffer_size must be a positive number')
 
-        iterators = [iter(iterable) for iterable in iterables]
+        current_thread = threading.current_thread()
 
-        # Set to True to gracefully terminate all producers
-        cancel = False
+        iterators = [iter(iterable) for iterable in iterables]
 
         # Deadlocks on the two queues are avoided using the following rule.
         # The writer guarantees to place a sentinel value into the buffer
@@ -64,13 +59,13 @@ class StreamExecutor(Executor):
         # and to stop reading after that. Any value of type BaseException is
         # treated as a sentinel.
         future_buffer = Queue(maxsize=buffer_size)
+        cancel = False
 
         # This function will run in a separate thread.
         def consume_inputs():
-            while True:
-                if cancel:
-                    future_buffer.put(CancelledError())
-                    return
+            nonlocal cancel
+            while not cancel:
+                future = None
                 try:
                     args = [next(iterator) for iterator in iterators]
                 except BaseException as e:
@@ -78,36 +73,40 @@ class StreamExecutor(Executor):
                     # exception is due to an error in the input generator. We
                     # forward the exception downstream so it can be raised
                     # when client iterates through the result of map.
-                    future_buffer.put(e)
-                    return
-                try:
-                    future = self.submit(fn, *args)
-                except BaseException as e:
-                    # E.g., RuntimeError from shut down executor.
-                    # Forward the new exception downstream.
-                    future_buffer.put(e)
-                    return
-                future_buffer.put(future)
-
-        # This function will run in the main thread.
-        def produce_results():
-            def cleanup():
-                nonlocal cancel
-                cancel = True
+                    future = e
+                if not future:
+                    try:
+                        future = self.submit(fn, *args)
+                    except BaseException as e:
+                        # E.g., RuntimeError from shut down executor.
+                        # Forward the new exception downstream.
+                        future = e
                 while True:
-                    future = future_buffer.get()
+                    try:
+                        future_buffer.put(future, timeout=1)
+                    except Full:
+                        if cancel or not current_thread.is_alive():
+                            cancel = True
+                            break
+                        else:
+                            continue
                     if isinstance(future, BaseException):
-                        break
+                        return
                     else:
-                        future.cancel()
-                raise exc
-
-            # Ensure cleanup happens even if client never starts this generator.
-            try:
-                yield None
-            except GeneratorExit as exc:
-                cleanup()
+                        break
             while True:
+                try:
+                    future = future_buffer.get(block=False)
+                except Empty:
+                    return
+                if isinstance(future, BaseException):
+                    return
+                future.cancel()
+
+        # Instances of this class will be created and their methods executed in the main thread.
+        class Producer:
+            def __next__(self):
+                nonlocal cancel
                 future = future_buffer.get()
                 if isinstance(future, BaseException):
                     # Reraise upstream exceptions at the map call site.
@@ -116,19 +115,25 @@ class StreamExecutor(Executor):
                     remaining_timeout = None
                 else:
                     remaining_timeout = end_time - time.time()
-                # Reraise new exceptions (errors in the callable fn, TimeOut,
-                # GeneratorExit) at map call site, but also cancel upstream.
+                # Any exceptions (errors in the callable fn, TimeOut,
+                # GeneratorExit) will be raised at map call site.
                 try:
-                    yield future.result(remaining_timeout)
-                except BaseException as exc:
-                    cleanup()
+                    return future.result(remaining_timeout)
+                except BaseException:
+                    cancel = True
+                    raise
+
+            def __iter__(self):
+                return self
+
+            def __del__(self):
+                nonlocal cancel
+                cancel = True
 
         thread = threading.Thread(target=consume_inputs)
         thread.start()
-        result = produce_results()
-        # Consume the dummy `None` result
-        next(result)
-        return result
+        return Producer()
+
 
 class StreamThreadPoolExecutor(StreamExecutor, ThreadPoolExecutor): ...
 

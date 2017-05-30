@@ -2,10 +2,9 @@ import time
 from queue import Queue
 from concurrent.futures import Executor, ThreadPoolExecutor, ProcessPoolExecutor
 from concurrent.futures.process import _get_chunks, _process_chunk
-from traceback import print_stack
 from functools import partial
-from collections import deque
 import sys
+import contextlib
 import threading
 import itertools
 
@@ -13,7 +12,27 @@ class CancelledError(Exception):
     pass
 
 
+# http://stackoverflow.com/a/40257140/336527
+@contextlib.contextmanager
+def _non_blocking_lock(lock):
+    locked = lock.acquire(False)
+    try:
+        yield locked
+    finally:
+        if locked:
+            lock.release()
+
+
 class StreamExecutor(Executor):
+    _cleanup_callbacks = []
+
+    @classmethod
+    def cleanup_thread(cls):
+        threading.main_thread().join()
+        for fn in cls._cleanup_callbacks:
+            fn()
+        time.sleep(10)
+
     def map(self, fn, *iterables, timeout=None, chunksize=1, buffer_size=10000):
         """Returns an iterator equivalent to map(fn, iter).
 
@@ -54,8 +73,10 @@ class StreamExecutor(Executor):
 
         iterators = [iter(iterable) for iterable in iterables]
 
-        # Set to True to gracefully terminate all producers
+        # Set to True to gracefully terminate all producers.
         cancel = False
+        # Must acquire this lock before assigning to cancel.
+        cancel_lock = threading.Lock()
 
         # Deadlocks on the two queues are avoided using the following rule.
         # The writer guarantees to place a sentinel value into the buffer
@@ -91,21 +112,32 @@ class StreamExecutor(Executor):
 
         # This function will run in the main thread.
         def produce_results():
+            # This function may run in the main thread or in a cleanup thread.
+            # We must keep it thread-safe and idempotent.
             def cleanup():
                 nonlocal cancel
-                cancel = True
-                while True:
-                    future = future_buffer.get()
-                    if isinstance(future, BaseException):
-                        break
-                    else:
-                        future.cancel()
-                raise exc
+                nonlocal last_exception
+                # We only need to run cleanup once, so if we can't acquire lock, do nothing.
+                with _non_blocking_lock(cancel_lock) as locked:
+                    if locked and not cancel:
+                        cancel = True
+                        while True:
+                            future = future_buffer.get()
+                            if isinstance(future, BaseException):
+                                break
+                            else:
+                                future.cancel()
+                        if last_exception:
+                            # We are in the main thread, and this was a result of an exception.
+                            raise last_exception
+            self._cleanup_callbacks.append(cleanup)
 
             # Ensure cleanup happens even if client never starts this generator.
+            last_exception = None
             try:
                 yield None
             except GeneratorExit as exc:
+                last_exception = exc
                 cleanup()
             while True:
                 future = future_buffer.get()
@@ -121,6 +153,7 @@ class StreamExecutor(Executor):
                 try:
                     yield future.result(remaining_timeout)
                 except BaseException as exc:
+                    last_exception = exc
                     cleanup()
 
         thread = threading.Thread(target=consume_inputs)
@@ -142,3 +175,5 @@ class StreamProcessPoolExecutor(StreamExecutor, ProcessPoolExecutor):
                               _get_chunks(*iterables, chunksize=chunksize),
                               timeout=timeout, buffer_size=buffer_size)
         return itertools.chain.from_iterable(results)
+
+threading.Thread(target=StreamExecutor.cleanup_thread).start()

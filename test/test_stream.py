@@ -115,8 +115,9 @@ def test_timing_10_workers(test_class):
             pass
         assert t.elapsed() == approx(3)
 
+# Imitate abnormal main thread exit
 @pytest.mark.xfail
-@pytest.mark.parametrize("test_class", test_classes_timing)
+@pytest.mark.parametrize("test_class", test_classes)
 def test_abnormal_termination(test_class):
     executor = test_class(max_workers=2)
     m = executor.map(process, count())
